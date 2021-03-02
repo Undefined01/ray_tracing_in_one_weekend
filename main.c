@@ -3,6 +3,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+// 生成[0, 1)的随机数
+float rand_float() { return (float)rand() / RAND_MAX; }
 
 typedef struct {
     float d[3];
@@ -28,6 +32,13 @@ float vec3_dot(const Vec3 a, const Vec3 b) {
 }
 float vec3_len(const Vec3 v) { return sqrt(vec3_dot(v, v)); }
 Vec3 vec3_unit(const Vec3 v) { return vec3_sdiv(v, vec3_len(v)); }
+
+Vec3 rand_vec3() {
+    Vec3 res;
+    do res = (Vec3){{rand_float(), rand_float(), rand_float()}};
+    while (vec3_dot(res, res) > 1);
+    return res;
+}
 
 typedef struct {
     // 起始位置
@@ -121,26 +132,38 @@ Vec3 render(Ray *r, World *world) {
                     vec3_smul((Vec3){{0.5, 0.7, 1.0}}, 0.5 + t));
 }
 
+typedef struct Camera {
+    Vec3 pos;
+    Vec3 ori;
+} Camera;
+
+// 根据摄像机自身的位置和相对视角 (u,v) ，给出需要渲染的光线
+Ray camera_get_ray(const Camera *self, const float u, const float v) {
+    return (Ray){self->pos, vec3_add(self->ori, (Vec3){{u * 4, v * 2}})};
+}
+
 int main() {
     int nx = 200;
     int ny = 100;
+    // 像素内重复取样次数
+    int ns = 100;
     printf("P3\n%d %d\n255\n", nx, ny);
 
-    Vec3 origin = {{0, 0, 0}};
+    Camera camera = {{{0, 0, 0}}, {{0, 0, -1}}};
     Sphere s1 = {{sphere_is_hit}, {{0, 0, -1}}, 0.5};
     Sphere s2 = {{sphere_is_hit}, {{0, -100.5, -1}}, 100};
     Object *obj_list[] = {(Object *)&s1, (Object *)&s2};
     World world = {{world_is_hit}, obj_list, 2};
     for (int j = ny - 1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
-            float u = (float)i / (float)nx - 0.5;
-            float v = (float)j / (float)ny - 0.5;
-
-            // 光栅化，将从原点到
-            // (-2, -1, -1) -- (2, -1, -1) -- (2, 1, -1) -- (-2, 1, -1)
-            // 这一锥形区域内的图像投影到 200x100 的画布上
-            Ray r = {origin, {{u * 4, v * 2, -1}}};
-            Vec3 pixel = render(&r, &world);
+            Vec3 pixel = {{0, 0, 0}};
+            for (int s = 0; s < ns; s++) {
+                float u = ((float)i + rand_float()) / (float)nx - 0.5;
+                float v = ((float)j + rand_float()) / (float)ny - 0.5;
+                Ray r = camera_get_ray(&camera, u, v);
+                pixel = vec3_add(pixel, render(&r, &world));
+            }
+            pixel = vec3_sdiv(pixel, ns);
 
             if (!(0 <= pixel.d[0] && pixel.d[0] <= 1 && 0 <= pixel.d[1] &&
                   pixel.d[1] <= 1 && 0 <= pixel.d[2] && pixel.d[2] <= 1)) {
