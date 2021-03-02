@@ -14,7 +14,7 @@ build/raytracing: build/main.o
 all: build/raytracing
 
 run: build/raytracing
-	build/raytracing > build/out.ppm
+	bash -c 'time build/raytracing > build/out.ppm'
 
 clean:
 	rm -r build

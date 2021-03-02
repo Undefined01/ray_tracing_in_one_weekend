@@ -95,7 +95,7 @@ typedef struct HitInfo {
     // 碰撞点法线，单位向量
     Vec3 norm;
     // 碰撞点材质渲染器
-    Material *material;
+    const Material *material;
 } HitInfo;
 
 // 根据入射方向和法向量计算反射方向。均为单位向量
@@ -134,6 +134,12 @@ bool lambertian_scatter(const HitInfo *info,
     return true;
 }
 
+Material *new_lambertian(const Vec3 albedo) {
+    Lambertian *this = malloc(sizeof(Lambertian));
+    *this = (Lambertian){{lambertian_scatter}, albedo};
+    return (Material *)this;
+}
+
 // 金属材质
 typedef struct {
     // 通过指针的方式实现接口
@@ -156,6 +162,12 @@ bool metal_scatter(const HitInfo *info, const Ray *r, Vec3 *attenuation,
         vec3_unit(vec3_add(scattered->ori, vec3_smul(rand_vec3(), self->fuzz)));
     // // 防止漫反射生成的光线进入表面内部
     return vec3_dot(scattered->ori, info->norm) > 0;
+}
+
+Material *new_metal(const Vec3 albedo, const float fuzz) {
+    Metal *this = malloc(sizeof(Metal));
+    *this = (Metal){{metal_scatter}, albedo, fuzz};
+    return (Material *)this;
 }
 
 // 玻璃材质
@@ -199,10 +211,16 @@ bool glass_scatter(const HitInfo *info, const Ray *r, Vec3 *attenuation,
     return true;
 }
 
+Material *new_glass(const float refraction_index) {
+    Glass *this = malloc(sizeof(Glass));
+    *this = (Glass){{glass_scatter}, refraction_index};
+    return (Material *)this;
+}
+
 typedef struct {
     // 通过指针的方式实现接口
     Object parent;
-    Material *mat;
+    const Material *mat;
     Vec3 pos;
     float r;
 } Sphere;
@@ -233,6 +251,13 @@ bool sphere_is_hit(const Object *this, const Ray *r, HitInfo *info) {
         return true;
     }
     return false;
+}
+
+Object *new_sphere(const Vec3 pos, const float radius,
+                   const Material *material) {
+    Sphere *this = malloc(sizeof(Sphere));
+    *this = (Sphere){{sphere_is_hit}, material, pos, radius};
+    return (Object *)this;
 }
 
 // 渲染的世界，可视为将世界内所有物体组合成了一个实体
@@ -286,8 +311,8 @@ typedef struct Camera {
 
 Camera *new_camera(const Vec3 pos, const Vec3 ori) {
     Camera *camera = malloc(sizeof(Camera));
-    // 利用 (0, 1, 0) 确定摄像机的旋转
-    Vec3 vx = vec3_unit(vec3_neg(vec3_cross((Vec3){{0, 1, 0}}, ori)));
+    // 利用 (0, -1, 0) 确定摄像机的旋转
+    Vec3 vx = vec3_unit(vec3_cross((Vec3){{0, -1, 0}}, ori));
     Vec3 vy = vec3_cross(vx, ori);
     *camera = (Camera){pos, ori, vx, vy};
     return camera;
@@ -295,9 +320,45 @@ Camera *new_camera(const Vec3 pos, const Vec3 ori) {
 
 // 根据摄像机自身的位置和相对视角 (u,v) ，给出需要渲染的光线
 Ray camera_get_ray(const Camera *self, const float u, const float v) {
-    return (Ray){self->pos, vec3_unit(vec3_add(vec3_add(vec3_smul(self->vx, u),
-                                                        vec3_smul(self->vy, v)),
-                                               self->ori))};
+    Vec3 offset = vec3_add(vec3_smul(self->vx, u), vec3_smul(self->vy, v));
+    return (Ray){self->pos, vec3_unit(vec3_add(self->ori, offset))};
+}
+
+World *random_world() {
+    Object **list = malloc(sizeof(Object *) * 500);
+    int i = 0;
+    // 地面
+    list[i++] = new_sphere((Vec3){{0, -1000, 0}}, 1000,
+                           new_lambertian((Vec3){{0.5, 0.5, 0.5}}));
+    // 大球
+    list[i++] = new_sphere((Vec3){{-4, 1, 0}}, 1,
+                           new_lambertian((Vec3){{0.4, 0.2, 0.1}}));
+    list[i++] = new_sphere((Vec3){{0, 1, 0}}, 1,
+                           new_glass(1.5));
+    list[i++] = new_sphere((Vec3){{4, 1, 0}}, 1,
+                           new_metal((Vec3){{0.7, 0.6, 0.5}}, 0));
+    for (int x = -10; x <= 10; x++)
+        for (int z = -10; z <= 10; z++) {
+            double choose = rand_float();
+            Vec3 pos = {{x + 0.9 * rand_float(), 0.2, z + 0.9 * rand_float()}};
+            Material *material;
+            if (choose < 0.8)
+                material = new_lambertian((Vec3){
+                    {rand_float() * rand_float(), rand_float() * rand_float(),
+                     rand_float() * rand_float()}});
+            else if (choose < 0.95)
+                material = new_metal(
+                    (Vec3){{rand_float() * 0.5 + 0.5, rand_float() * 0.5 + 0.5,
+                            rand_float() * 0.5 + 0.5}},
+                    0.5 * rand_float());
+            else
+                material = new_glass(1.5 + rand_float() * 0.1);
+            list[i++] = new_sphere(pos, 0.2, material);
+        }
+
+    World *world = malloc(sizeof(World));
+    *world = (World){{world_is_hit}, list, i};
+    return world;
 }
 
 int main() {
@@ -306,22 +367,11 @@ int main() {
     // 单位长度的像素个数
     int nu = 100;
     // 像素内重复取样次数
-    int ns = 500;
+    int ns = 100;
     printf("P3\n%d %d\n255\n", nx, ny);
 
-    Camera *camera = new_camera((Vec3){{-2, 2, 1}}, (Vec3){{0.8, -0.8, -0.8}});
-    Lambertian m1 = {{lambertian_scatter}, {{0.8, 0.3, 0.3}}};
-    Lambertian m2 = {{lambertian_scatter}, {{0.8, 0.8, 0.0}}};
-    Sphere s1 = {{sphere_is_hit}, (Material *)&m1, {{0, 0, -1}}, 0.5};
-    Sphere s2 = {{sphere_is_hit}, (Material *)&m2, {{0, -100.5, -1}}, 100};
-    Metal m3 = {{metal_scatter}, {{0.8, 0.6, 0.2}}, 0.3};
-    Glass m4 = {{glass_scatter}, 1.5};
-    Sphere s3 = {{sphere_is_hit}, (Material *)&m3, {{1, 0, -1}}, 0.2};
-    Sphere s4 = {{sphere_is_hit}, (Material *)&m4, {{-1, 0, -1}}, 0.5};
-    Object *obj_list[] = {(Object *)&s1, (Object *)&s2, (Object *)&s3,
-                          (Object *)&s4};
-    World world = {
-        {world_is_hit}, obj_list, sizeof(obj_list) / sizeof(Object *)};
+    Camera *camera = new_camera((Vec3){{8, 1.5, 3}}, (Vec3){{-0.9, -0.25, -0.33}});
+    World *world = random_world();
     for (int j = ny - 1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
             Vec3 pixel = {{0, 0, 0}};
@@ -330,7 +380,7 @@ int main() {
             for (int s = 0; s < ns; s++) {
                 Ray r = camera_get_ray(camera, u + rand_float() / nu,
                                        v + rand_float() / nu);
-                pixel = vec3_add(pixel, render(&r, &world, 10));
+                pixel = vec3_add(pixel, render(&r, world, 10));
             }
             pixel = vec3_sdiv(pixel, ns);
 
