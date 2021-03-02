@@ -147,8 +147,8 @@ bool metal_scatter(const HitInfo *info, const Ray *r, Vec3 *attenuation,
     *scattered = (Ray){info->pos, reflect(r->ori, info->norm)};
     if (self->fuzz == 0) return true;
     // 漫反射
-        scattered->ori = vec3_unit(
-            vec3_add(scattered->ori, vec3_smul(rand_vec3(), self->fuzz)));
+    scattered->ori =
+        vec3_unit(vec3_add(scattered->ori, vec3_smul(rand_vec3(), self->fuzz)));
     // // 防止漫反射生成的光线进入表面内部
     return vec3_dot(scattered->ori, info->norm) > 0;
 }
@@ -158,26 +158,38 @@ typedef struct {
     // 通过指针的方式实现接口
     Material material;
     // 折射率
-    float refration_index;
+    float refraction_index;
 } Glass;
+
+// 玻璃的反射率近似算法，与入射角有关
+float schlick(float cosine, float refraction_index) {
+    float r0 = (1 - refraction_index) / (1 + refraction_index);
+    r0 = r0 * r0;
+    return r0 + (1 - r0) * pow((1 - cosine), 5);
+}
 
 bool glass_scatter(const HitInfo *info, const Ray *r, Vec3 *attenuation,
                    Ray *scattered) {
     const Glass *self = (const Glass *)(info->material);
-    float ni_over_nt = self->refration_index;
+    float ni_over_nt = self->refraction_index;
     Vec3 outward_norm = info->norm;
-    if (vec3_dot(r->ori, info->norm) > 0)
+    float cosine;
+    if (vec3_dot(r->ori, info->norm) > 0) {
         outward_norm = vec3_neg(outward_norm);
-    else
+        cosine = self->refraction_index * vec3_dot(r->ori, info->norm);
+    } else {
         ni_over_nt = 1 / ni_over_nt;
+        cosine = -vec3_dot(r->ori, info->norm);
+    }
 
     Vec3 refracted;
+    float reflect_prob = schlick(cosine, self->refraction_index);
     *attenuation = (Vec3){{1, 1, 1}};
-    if (refract(r->ori, outward_norm, ni_over_nt, &refracted)) {
+    if (refract(r->ori, outward_norm, ni_over_nt, &refracted) &&
+        rand_float() > reflect_prob) {
         *scattered = (Ray){info->pos, refracted};
     } else {
         *scattered = (Ray){info->pos, reflect(r->ori, info->norm)};
-        return false;
     }
     return true;
 }
@@ -251,7 +263,7 @@ Vec3 render(const Ray *r, const World *world, int depth) {
             depth > 0)
             return vec3_mul(render(&scattered, world, depth - 1), attenuation);
         // 散射光线不存在或渲染层数过深
-        return (Vec3){{0,0,0}};
+        return (Vec3){{0, 0, 0}};
     }
     // 生成上蓝下白的渐变作为背景
     Vec3 ori = vec3_unit(r->ori);
