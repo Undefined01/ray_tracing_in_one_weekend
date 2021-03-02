@@ -51,30 +51,88 @@ typedef struct {
     Vec3 ori;
 } Ray;
 
-// 光线与物体碰撞时的信息
-typedef struct {
-    // 位置参数，实际坐标为 ray.pos + t * ray.ori
-    float t;
-    // 位置坐标，与上面计算结果相等
-    Vec3 pos;
-    // 碰撞点法线，单位向量
-    Vec3 norm;
-} HitInfo;
-
 // 声明而不定义
 typedef struct Object Object;
+typedef struct Material Material;
+typedef struct HitInfo HitInfo;
 
 // 判断某物体是否与光线碰撞。如果碰撞，通过 HitInfo 指针返回碰撞点信息
-typedef bool (*IsHitFunc)(const Object *self, const Ray *r, HitInfo *info);
+typedef bool (*IsHitFunc)(const Object *this, const Ray *r, HitInfo *info);
+
+// 光与物体碰撞后计算散射结果的函数，与材质有关。
+// attenuation为衰减系数，scattered为散射光线
+typedef bool (*ScatterFunc)(const HitInfo *info, const Ray *r,
+                            Vec3 *attenuation, Ray *scattered);
 
 // 物体的抽象类
 typedef struct Object {
     IsHitFunc is_hit;
 } Object;
 
+// 材质的抽象类
+typedef struct Material {
+    ScatterFunc scatter;
+} Material;
+
+// 光线与物体碰撞时的信息
+typedef struct HitInfo {
+    // 位置参数，实际坐标为 ray.pos + t * ray.ori
+    float t;
+    // 位置坐标，与上面计算结果相等
+    Vec3 pos;
+    // 碰撞点法线，单位向量
+    Vec3 norm;
+    // 碰撞点材质渲染器
+    Material *material;
+} HitInfo;
+
+// 漫反射
+typedef struct {
+    // 通过指针的方式实现接口
+    Material material;
+    Vec3 attenuation;
+} Lambertian;
+
+bool lambertian_scatter(const HitInfo *info,
+                        const Ray *r __attribute__((__unused__)),
+                        Vec3 *attenuation, Ray *scattered) {
+    Lambertian *self = (Lambertian *)(info->material);
+    *attenuation = self->attenuation;
+    // 漫反射
+    *scattered = (Ray){info->pos, vec3_unit(vec3_add(info->norm, rand_vec3()))};
+    return true;
+}
+
+// 金属反射
+typedef struct {
+    // 通过指针的方式实现接口
+    Material material;
+    Vec3 attenuation;
+    // 金属的漫反射
+    float fuzz;
+} Metal;
+
+bool metal_scatter(const HitInfo *info,
+                   const Ray *r __attribute__((__unused__)), Vec3 *attenuation,
+                   Ray *scattered) {
+    Metal *self = (Metal *)(info->material);
+    *attenuation = self->attenuation;
+    // 反射光线（b = a - 2 * a * n * n， n为法向单位向量）
+    *scattered = (Ray){
+        info->pos,
+        vec3_sub(
+            r->ori,
+            vec3_smul(vec3_smul(info->norm, vec3_dot(r->ori, info->norm)), 2))};
+    // 漫反射
+    scattered->ori =
+        vec3_unit(vec3_add(scattered->ori, vec3_smul(rand_vec3(), self->fuzz)));
+    return true;
+}
+
 typedef struct {
     // 通过指针的方式实现接口
     Object parent;
+    Material *mat;
     Vec3 pos;
     float r;
 } Sphere;
@@ -92,6 +150,7 @@ bool sphere_is_hit(const Object *this, const Ray *r, HitInfo *info) {
     info->t = t;
     info->pos = vec3_add(r->pos, vec3_smul(r->ori, t));
     info->norm = vec3_sdiv(vec3_sub(info->pos, s->pos), s->r);
+    info->material = s->mat;
     return true;
 }
 
@@ -122,17 +181,10 @@ Vec3 render(const Ray *r, const World *world) {
     HitInfo info;
     // 判断是否与世界中的物体碰撞
     if (((Object *)world)->is_hit((Object *)world, r, &info)) {
-        // // 反射光线（b = a - 2 * a * n * n， n为法向单位向量）
-        // Ray reflection = (Ray){
-        //     info.pos,
-        //     vec3_sub(r->ori, vec3_smul(vec3_smul(info.norm,
-        //                                          vec3_dot(r->ori, info.norm)),
-        //                                2))};
-        // 漫反射
-        Ray reflection =
-            (Ray){info.pos, vec3_unit(vec3_add(info.norm, rand_vec3()))};
-        // 吸收 50% 的亮度
-        return vec3_smul(render(&reflection, world), 0.5);
+        Vec3 attenuation;
+        Ray scattered;
+        if (info.material->scatter(&info, r, &attenuation, &scattered))
+            return vec3_mul(render(&scattered, world), attenuation);
     }
     // 生成上蓝下白的渐变作为背景
     Vec3 ori = vec3_unit(r->ori);
@@ -161,10 +213,18 @@ int main() {
     printf("P3\n%d %d\n255\n", nx, ny);
 
     Camera camera = {{{0, 0, 0}}, {{0, 0, -0.5}}};
-    Sphere s1 = {{sphere_is_hit}, {{0, 0, -1}}, 0.5};
-    Sphere s2 = {{sphere_is_hit}, {{0, -100.5, -1}}, 100};
-    Object *obj_list[] = {(Object *)&s1, (Object *)&s2};
-    World world = {{world_is_hit}, obj_list, 2};
+    Lambertian m1 = {{lambertian_scatter}, {{0.8, 0.3, 0.3}}};
+    Lambertian m2 = {{lambertian_scatter}, {{0.8, 0.8, 0.0}}};
+    Sphere s1 = {{sphere_is_hit}, (Material *)&m1, {{0, 0, -1}}, 0.5};
+    Sphere s2 = {{sphere_is_hit}, (Material *)&m2, {{0, -100.5, -1}}, 100};
+    Metal m3 = {{metal_scatter}, {{0.8, 0.6, 0.2}}, 0.3};
+    Metal m4 = {{metal_scatter}, {{0.8, 0.8, 0.8}}, 1.0};
+    Sphere s3 = {{sphere_is_hit}, (Material *)&m3, {{1, 0, -1}}, 0.2};
+    Sphere s4 = {{sphere_is_hit}, (Material *)&m4, {{-1, 0, -1}}, 0.5};
+    Object *obj_list[] = {(Object *)&s1, (Object *)&s2, (Object *)&s3,
+                          (Object *)&s4};
+    World world = {
+        {world_is_hit}, obj_list, sizeof(obj_list) / sizeof(Object *)};
     for (int j = ny - 1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
             Vec3 pixel = {{0, 0, 0}};
