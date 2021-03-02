@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
@@ -33,9 +34,12 @@ float vec3_dot(const Vec3 a, const Vec3 b) {
 float vec3_len(const Vec3 v) { return sqrt(vec3_dot(v, v)); }
 Vec3 vec3_unit(const Vec3 v) { return vec3_sdiv(v, vec3_len(v)); }
 
+// 生成单位球内的随机向量
 Vec3 rand_vec3() {
     Vec3 res;
-    do res = (Vec3){{rand_float(), rand_float(), rand_float()}};
+    do
+        res = (Vec3){
+            {rand_float() * 2 - 1, rand_float() * 2 - 1, rand_float() * 2 - 1}};
     while (vec3_dot(res, res) > 1);
     return res;
 }
@@ -43,7 +47,7 @@ Vec3 rand_vec3() {
 typedef struct {
     // 起始位置
     Vec3 pos;
-    // 方向，非单位向量
+    // 方向，单位向量
     Vec3 ori;
 } Ray;
 
@@ -114,16 +118,21 @@ bool world_is_hit(const Object *this, const Ray *r, HitInfo *info) {
     return is_hit;
 }
 
-Vec3 render(Ray *r, World *world) {
+Vec3 render(const Ray *r, const World *world) {
     HitInfo info;
     // 判断是否与世界中的物体碰撞
     if (((Object *)world)->is_hit((Object *)world, r, &info)) {
-        // fprintf(stderr, "%f (%f %f %f) (%f %f %f)\n", info.t, info.pos.d[0],
-        //         info.pos.d[1], info.pos.d[2], info.norm.d[0], info.norm.d[1],
-        //         info.norm.d[2]);
-
-        // 将碰撞的法线的方向可视化
-        return vec3_smul(vec3_add(info.norm, (Vec3){{1, 1, 1}}), 0.5);
+        // // 反射光线（b = a - 2 * a * n * n， n为法向单位向量）
+        // Ray reflection = (Ray){
+        //     info.pos,
+        //     vec3_sub(r->ori, vec3_smul(vec3_smul(info.norm,
+        //                                          vec3_dot(r->ori, info.norm)),
+        //                                2))};
+        // 漫反射
+        Ray reflection =
+            (Ray){info.pos, vec3_unit(vec3_add(info.norm, rand_vec3()))};
+        // 吸收 50% 的亮度
+        return vec3_smul(render(&reflection, world), 0.5);
     }
     // 生成上蓝下白的渐变作为背景
     Vec3 ori = vec3_unit(r->ori);
@@ -139,17 +148,19 @@ typedef struct Camera {
 
 // 根据摄像机自身的位置和相对视角 (u,v) ，给出需要渲染的光线
 Ray camera_get_ray(const Camera *self, const float u, const float v) {
-    return (Ray){self->pos, vec3_add(self->ori, (Vec3){{u * 4, v * 2}})};
+    return (Ray){self->pos, vec3_unit(vec3_add(self->ori, (Vec3){{u, v, 0}}))};
 }
 
 int main() {
     int nx = 200;
     int ny = 100;
+    // 单位长度的像素个数
+    int nu = 100;
     // 像素内重复取样次数
     int ns = 100;
     printf("P3\n%d %d\n255\n", nx, ny);
 
-    Camera camera = {{{0, 0, 0}}, {{0, 0, -1}}};
+    Camera camera = {{{0, 0, 0}}, {{0, 0, -0.5}}};
     Sphere s1 = {{sphere_is_hit}, {{0, 0, -1}}, 0.5};
     Sphere s2 = {{sphere_is_hit}, {{0, -100.5, -1}}, 100};
     Object *obj_list[] = {(Object *)&s1, (Object *)&s2};
@@ -157,10 +168,11 @@ int main() {
     for (int j = ny - 1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
             Vec3 pixel = {{0, 0, 0}};
+            float u = ((float)i - (float)nx / 2) / nu;
+            float v = ((float)j - (float)ny / 2) / nu;
             for (int s = 0; s < ns; s++) {
-                float u = ((float)i + rand_float()) / (float)nx - 0.5;
-                float v = ((float)j + rand_float()) / (float)ny - 0.5;
-                Ray r = camera_get_ray(&camera, u, v);
+                Ray r = camera_get_ray(&camera, u + rand_float() / nu,
+                                       v + rand_float() / nu);
                 pixel = vec3_add(pixel, render(&r, &world));
             }
             pixel = vec3_sdiv(pixel, ns);

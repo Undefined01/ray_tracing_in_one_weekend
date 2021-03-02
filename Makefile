@@ -1,5 +1,5 @@
 GCC ?= gcc
-CFLAGS ?= -std=c11 -Wall -Wextra
+CFLAGS ?= -std=c11 -Wall -Wextra -march=native -O3
 LDFLAGS ?= -lm
 
 .DEFAULT_GOAL := all
