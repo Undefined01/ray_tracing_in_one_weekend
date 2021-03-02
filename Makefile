@@ -1,6 +1,6 @@
 GCC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra
-LDFLAGS ?= 
+LDFLAGS ?= -lm
 
 .DEFAULT_GOAL := all
 
