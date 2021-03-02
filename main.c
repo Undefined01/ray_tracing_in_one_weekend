@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -5,16 +6,16 @@
 
 typedef struct {
     float d[3];
-} vec3;
+} Vec3;
 
 #define decl_vec3_op(name, op)                                 \
-    vec3 vec3_s##name(const vec3 a, const float b) {           \
-        vec3 c;                                                \
+    Vec3 vec3_s##name(const Vec3 a, const float b) {           \
+        Vec3 c;                                                \
         for (int i = 0; i < 3; i++) c.d[i] = a.d[i] op b;      \
         return c;                                              \
     }                                                          \
-    vec3 vec3_##name(const vec3 a, const vec3 b) {             \
-        vec3 c;                                                \
+    Vec3 vec3_##name(const Vec3 a, const Vec3 b) {             \
+        Vec3 c;                                                \
         for (int i = 0; i < 3; i++) c.d[i] = a.d[i] op b.d[i]; \
         return c;                                              \
     }
@@ -22,42 +23,102 @@ decl_vec3_op(add, +);
 decl_vec3_op(sub, -);
 decl_vec3_op(mul, *);
 decl_vec3_op(div, /);
-float vec3_dot(const vec3 a, const vec3 b) {
+float vec3_dot(const Vec3 a, const Vec3 b) {
     return a.d[0] * b.d[0] + a.d[1] * b.d[1] + a.d[2] * b.d[2];
 }
-float vec3_len(const vec3 v) { return sqrt(vec3_dot(v, v)); }
-vec3 vec3_unit(const vec3 v) { return vec3_sdiv(v, vec3_len(v)); }
+float vec3_len(const Vec3 v) { return sqrt(vec3_dot(v, v)); }
+Vec3 vec3_unit(const Vec3 v) { return vec3_sdiv(v, vec3_len(v)); }
 
 typedef struct {
-    // 起始位置和方向
-    vec3 pos, ori;
-} ray;
+    // 起始位置
+    Vec3 pos;
+    // 方向，非单位向量
+    Vec3 ori;
+} Ray;
+
+// 光线与物体碰撞时的信息
+typedef struct {
+    // 位置参数，实际坐标为 ray.pos + t * ray.ori
+    float t;
+    // 位置坐标，与上面计算结果相等
+    Vec3 pos;
+    // 碰撞点法线，单位向量
+    Vec3 norm;
+} HitInfo;
+
+// 声明而不定义
+typedef struct Object Object;
+
+// 判断某物体是否与光线碰撞。如果碰撞，通过 HitInfo 指针返回碰撞点信息
+typedef bool (*IsHitFunc)(const Object *self, const Ray *r, HitInfo *info);
+
+// 物体的抽象类
+typedef struct Object {
+    IsHitFunc is_hit;
+} Object;
 
 typedef struct {
-    vec3 pos;
+    // 通过指针的方式实现接口
+    Object parent;
+    Vec3 pos;
     float r;
-} sphere;
-bool hit_sphere(const ray *r, const sphere *s) {
-    vec3 oc = vec3_sub(r->pos, s->pos);
+} Sphere;
+
+bool sphere_is_hit(const Object *this, const Ray *r, HitInfo *info) {
+    const Sphere *s = (const Sphere *)this;
+    Vec3 oc = vec3_sub(r->pos, s->pos);
     float a = vec3_dot(r->ori, r->ori);
-    float b = vec3_dot(oc, r->ori);
+    float b2 = vec3_dot(oc, r->ori);  // 该变量实际上为 2 * b
     float c = vec3_dot(oc, oc) - s->r * s->r;
-    return b * b - a * c > 0;
+    float delta = b2 * b2 - a * c;
+    if (delta <= FLT_EPSILON) return false;
+    float t = (-b2 - sqrt(delta)) / a;
+    if (t <= FLT_EPSILON) return false;
+    info->t = t;
+    info->pos = vec3_add(r->pos, vec3_smul(r->ori, t));
+    info->norm = vec3_sdiv(vec3_sub(info->pos, s->pos), s->r);
+    return true;
 }
 
-vec3 color(ray *r) {
-    // (0, 0, -1) 处的红色球
-    // 此时 hit_sphere 只能判断光所在直线与球是否相交。
-    // 因此把球的 z 坐标设为 +1 后仍然能看到。
-    // 后续将会继续改进。
-    sphere s = {{{0.0, 0.0, -1.0}}, 0.5};
-    if (hit_sphere(r, &s))
-        return (vec3){{1.0, 0.0, 0.0}};
+// 渲染的世界，可视为将世界内所有物体组合称了一个实体
+typedef struct {
+    // 通过指针的方式实现接口
+    Object parent;
+    // 世界内的所有物体
+    Object **obj;
+    size_t len;
+} World;
+
+bool world_is_hit(const Object *this, const Ray *r, HitInfo *info) {
+    const World *self = (const World *)this;
+    bool is_hit = false;
+    info->t = FLT_MAX;
+    HitInfo tmp_info;
+    for (size_t i = 0; i < self->len; i++) {
+        if (self->obj[i]->is_hit(self->obj[i], r, &tmp_info)) {
+            is_hit = true;
+            if (info->t > tmp_info.t) *info = tmp_info;
+        }
+    }
+    return is_hit;
+}
+
+Vec3 render(Ray *r, World *world) {
+    HitInfo info;
+    // 判断是否与世界中的物体碰撞
+    if (((Object *)world)->is_hit((Object *)world, r, &info)) {
+        // fprintf(stderr, "%f (%f %f %f) (%f %f %f)\n", info.t, info.pos.d[0],
+        //         info.pos.d[1], info.pos.d[2], info.norm.d[0], info.norm.d[1],
+        //         info.norm.d[2]);
+
+        // 将碰撞的法线的方向可视化
+        return vec3_smul(vec3_add(info.norm, (Vec3){{1, 1, 1}}), 0.5);
+    }
     // 生成上蓝下白的渐变作为背景
-    vec3 ori = vec3_unit(r->ori);
+    Vec3 ori = vec3_unit(r->ori);
     float t = 0.5 * ori.d[1];
-    return vec3_add(vec3_smul((vec3){{1.0, 1.0, 1.0}}, 0.5 - t),
-                    vec3_smul((vec3){{0.5, 0.7, 1.0}}, 0.5 + t));
+    return vec3_add(vec3_smul((Vec3){{1.0, 1.0, 1.0}}, 0.5 - t),
+                    vec3_smul((Vec3){{0.5, 0.7, 1.0}}, 0.5 + t));
 }
 
 int main() {
@@ -65,7 +126,11 @@ int main() {
     int ny = 100;
     printf("P3\n%d %d\n255\n", nx, ny);
 
-    vec3 origin = {{0, 0, 0}};
+    Vec3 origin = {{0, 0, 0}};
+    Sphere s1 = {{sphere_is_hit}, {{0, 0, -1}}, 0.5};
+    Sphere s2 = {{sphere_is_hit}, {{0, -100.5, -1}}, 100};
+    Object *obj_list[] = {(Object *)&s1, (Object *)&s2};
+    World world = {{world_is_hit}, obj_list, 2};
     for (int j = ny - 1; j >= 0; j--) {
         for (int i = 0; i < nx; i++) {
             float u = (float)i / (float)nx - 0.5;
@@ -74,12 +139,17 @@ int main() {
             // 光栅化，将从原点到
             // (-2, -1, -1) -- (2, -1, -1) -- (2, 1, -1) -- (-2, 1, -1)
             // 这一锥形区域内的图像投影到 200x100 的画布上
-            ray r = {origin, {{u * 4, v * 2, -1.0}}};
-            vec3 col = color(&r);
+            Ray r = {origin, {{u * 4, v * 2, -1}}};
+            Vec3 pixel = render(&r, &world);
 
-            int ir = (int)(255.99 * col.d[0]);
-            int ig = (int)(255.99 * col.d[1]);
-            int ib = (255.99 * col.d[2]);
+            if (!(0 <= pixel.d[0] && pixel.d[0] <= 1 && 0 <= pixel.d[1] &&
+                  pixel.d[1] <= 1 && 0 <= pixel.d[2] && pixel.d[2] <= 1)) {
+                fprintf(stderr, "Color out of bound at (%d,%d) (%f,%f,%f)\n", i,
+                        j, pixel.d[0], pixel.d[1], pixel.d[2]);
+            }
+            int ir = (int)(255.99 * pixel.d[0]);
+            int ig = (int)(255.99 * pixel.d[1]);
+            int ib = (255.99 * pixel.d[2]);
             printf("%d %d %d\n", ir, ig, ib);
         }
     }
