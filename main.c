@@ -38,6 +38,11 @@ Vec3 vec3_neg(const Vec3 v) {
 float vec3_dot(const Vec3 a, const Vec3 b) {
     return a.d[0] * b.d[0] + a.d[1] * b.d[1] + a.d[2] * b.d[2];
 }
+Vec3 vec3_cross(const Vec3 a, const Vec3 b) {
+    return (Vec3){{a.d[1] * b.d[2] - a.d[2] * b.d[1],
+                   a.d[2] * b.d[0] - a.d[0] * b.d[2],
+                   a.d[0] * b.d[1] - a.d[1] * b.d[0]}};
+}
 float vec3_len(const Vec3 v) { return sqrt(vec3_dot(v, v)); }
 Vec3 vec3_unit(const Vec3 v) { return vec3_sdiv(v, vec3_len(v)); }
 
@@ -275,23 +280,36 @@ Vec3 render(const Ray *r, const World *world, int depth) {
 typedef struct Camera {
     Vec3 pos;
     Vec3 ori;
+    // 缓存的方向向量
+    Vec3 vx, vy;
 } Camera;
+
+Camera *new_camera(const Vec3 pos, const Vec3 ori) {
+    Camera *camera = malloc(sizeof(Camera));
+    // 利用 (0, 1, 0) 确定摄像机的旋转
+    Vec3 vx = vec3_unit(vec3_neg(vec3_cross((Vec3){{0, 1, 0}}, ori)));
+    Vec3 vy = vec3_cross(vx, ori);
+    *camera = (Camera){pos, ori, vx, vy};
+    return camera;
+}
 
 // 根据摄像机自身的位置和相对视角 (u,v) ，给出需要渲染的光线
 Ray camera_get_ray(const Camera *self, const float u, const float v) {
-    return (Ray){self->pos, vec3_unit(vec3_add(self->ori, (Vec3){{u, v, 0}}))};
+    return (Ray){self->pos, vec3_unit(vec3_add(vec3_add(vec3_smul(self->vx, u),
+                                                        vec3_smul(self->vy, v)),
+                                               self->ori))};
 }
 
 int main() {
-    int nx = 800;
-    int ny = 400;
+    int nx = 200;
+    int ny = 100;
     // 单位长度的像素个数
-    int nu = 400;
+    int nu = 100;
     // 像素内重复取样次数
     int ns = 500;
     printf("P3\n%d %d\n255\n", nx, ny);
 
-    Camera camera = {{{0, 0, 0}}, {{0, 0, -0.5}}};
+    Camera *camera = new_camera((Vec3){{-2, 2, 1}}, (Vec3){{0.8, -0.8, -0.8}});
     Lambertian m1 = {{lambertian_scatter}, {{0.8, 0.3, 0.3}}};
     Lambertian m2 = {{lambertian_scatter}, {{0.8, 0.8, 0.0}}};
     Sphere s1 = {{sphere_is_hit}, (Material *)&m1, {{0, 0, -1}}, 0.5};
@@ -310,7 +328,7 @@ int main() {
             float u = ((float)i - (float)nx / 2) / nu;
             float v = ((float)j - (float)ny / 2) / nu;
             for (int s = 0; s < ns; s++) {
-                Ray r = camera_get_ray(&camera, u + rand_float() / nu,
+                Ray r = camera_get_ray(camera, u + rand_float() / nu,
                                        v + rand_float() / nu);
                 pixel = vec3_add(pixel, render(&r, &world, 10));
             }
